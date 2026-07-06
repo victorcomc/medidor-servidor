@@ -1,5 +1,6 @@
 import psutil
 import os
+import time
 from flask import Flask, jsonify, render_template_string
 
 app = Flask(__name__)
@@ -21,7 +22,7 @@ HTML = """<!DOCTYPE html>
   .card-value { font-size: 2rem; font-weight: 500; }
   .card-sub { font-size: 0.8rem; color: #666; margin-top: 0.25rem; }
   .bar-wrap { background: #2a2a2a; border-radius: 99px; height: 6px; margin-top: 0.75rem; overflow: hidden; }
-  .bar { height: 100%; border-radius: 99px; transition: width 0.5s; }
+  .bar { height: 100%; border-radius: 99px; transition: width 0.8s ease; }
   .bar-green { background: #22c55e; }
   .bar-yellow { background: #eab308; }
   .bar-red { background: #ef4444; }
@@ -30,7 +31,7 @@ HTML = """<!DOCTYPE html>
   .disk-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
   .disk-name { font-size: 0.85rem; font-weight: 500; }
   .disk-pct { font-size: 0.85rem; color: #666; }
-  .refreshing { font-size: 0.75rem; color: #444; text-align: right; }
+  .footer { font-size: 0.75rem; color: #444; text-align: right; margin-top: 1rem; }
   .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #22c55e; margin-right: 6px; animation: pulse 2s infinite; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
 </style>
@@ -42,12 +43,13 @@ HTML = """<!DOCTYPE html>
 <div class="grid" id="metrics"></div>
 <p class="section-title">Discos</p>
 <div id="disks"></div>
-<p class="refreshing" id="next-refresh"></p>
+<p class="footer" id="disk-refresh"></p>
 
 <script>
-let countdown = 600;
+let diskData = [];
+let diskCountdown = 120;
 
-function color(pct) {
+function barColor(pct) {
   if (pct < 70) return 'bar-green';
   if (pct < 85) return 'bar-yellow';
   return 'bar-red';
@@ -58,53 +60,66 @@ function fmt(bytes) {
   return (bytes/1e6).toFixed(0) + ' MB';
 }
 
-async function load() {
-  const r = await fetch('/api/stats');
-  const d = await r.json();
-
-  document.getElementById('last-update').textContent =
-    'Última atualização: ' + new Date().toLocaleTimeString('pt-BR');
-
+function renderMetrics(d) {
   const metrics = [
-    { label: 'CPU', value: d.cpu.percent.toFixed(0) + '%', sub: d.cpu.cores + ' núcleos', pct: d.cpu.percent },
-    { label: 'Memória', value: d.memory.percent.toFixed(0) + '%', sub: fmt(d.memory.used) + ' / ' + fmt(d.memory.total), pct: d.memory.percent },
-    { label: 'Disco principal', value: d.disk_root.percent.toFixed(0) + '%', sub: fmt(d.disk_root.used) + ' / ' + fmt(d.disk_root.total), pct: d.disk_root.percent },
+    { label: 'CPU', value: d.cpu.toFixed(0) + '%', sub: d.cores + ' núcleos', pct: d.cpu },
+    { label: 'Memória', value: d.mem_pct.toFixed(0) + '%', sub: fmt(d.mem_used) + ' / ' + fmt(d.mem_total), pct: d.mem_pct },
+    { label: 'Disco principal', value: d.disk_pct.toFixed(0) + '%', sub: fmt(d.disk_used) + ' / ' + fmt(d.disk_total), pct: d.disk_pct },
     { label: 'Uptime', value: d.uptime_h + 'h', sub: d.uptime_days + ' dias online', pct: null },
   ];
-
   document.getElementById('metrics').innerHTML = metrics.map(m => `
     <div class="card">
       <div class="card-label">${m.label}</div>
       <div class="card-value">${m.value}</div>
       <div class="card-sub">${m.sub}</div>
-      ${m.pct !== null ? `<div class="bar-wrap"><div class="bar ${color(m.pct)}" style="width:${m.pct}%"></div></div>` : ''}
+      ${m.pct !== null ? `<div class="bar-wrap"><div class="bar ${barColor(m.pct)}" style="width:${m.pct}%"></div></div>` : ''}
     </div>
   `).join('');
+}
 
-  document.getElementById('disks').innerHTML = d.disks.map(disk => `
+function renderDisks(disks) {
+  document.getElementById('disks').innerHTML = disks.map(d => `
     <div class="disk-row">
       <div class="disk-header">
-        <span class="disk-name">${disk.mountpoint}</span>
-        <span class="disk-pct">${fmt(disk.free)} livres &bull; ${disk.percent.toFixed(0)}%</span>
+        <span class="disk-name">${d.mountpoint}</span>
+        <span class="disk-pct">${fmt(d.free)} livres &bull; ${d.percent.toFixed(0)}%</span>
       </div>
-      <div class="bar-wrap"><div class="bar ${color(disk.percent)}" style="width:${disk.percent}%"></div></div>
+      <div class="bar-wrap"><div class="bar ${barColor(d.percent)}" style="width:${d.percent}%"></div></div>
     </div>
   `).join('');
-
-  countdown = 600;
 }
 
-function tick() {
-  countdown--;
-  const min = Math.floor(countdown / 60);
-  const sec = countdown % 60;
-  document.getElementById('next-refresh').textContent =
-    'Próxima atualização em ' + min + ':' + String(sec).padStart(2,'0');
-  if (countdown <= 0) load();
+async function loadMetrics() {
+  try {
+    const r = await fetch('/api/metrics');
+    const d = await r.json();
+    renderMetrics(d);
+    document.getElementById('last-update').textContent =
+      'Última atualização: ' + new Date().toLocaleTimeString('pt-BR');
+  } catch(e) {}
 }
 
-load();
-setInterval(tick, 1000);
+async function loadDisks() {
+  try {
+    const r = await fetch('/api/disks');
+    const d = await r.json();
+    diskData = d.disks;
+    renderDisks(diskData);
+    diskCountdown = 120;
+  } catch(e) {}
+}
+
+function diskTick() {
+  diskCountdown--;
+  document.getElementById('disk-refresh').textContent =
+    'Discos atualizam em ' + diskCountdown + 's';
+  if (diskCountdown <= 0) loadDisks();
+}
+
+loadMetrics();
+loadDisks();
+setInterval(loadMetrics, 5000);
+setInterval(diskTick, 1000);
 </script>
 </body>
 </html>"""
@@ -113,40 +128,48 @@ setInterval(tick, 1000);
 def index():
     return render_template_string(HTML)
 
-@app.route('/api/stats')
-def stats():
-    cpu = psutil.cpu_percent(interval=1)
+@app.route('/api/metrics')
+def metrics():
+    cpu = psutil.cpu_percent(interval=0.5)
     cores = psutil.cpu_count()
     mem = psutil.virtual_memory()
-    disk_root = psutil.disk_usage('/')
-    boot = psutil.boot_time()
-    import time
-    uptime_s = int(time.time() - boot)
-    uptime_h = uptime_s // 3600
-    uptime_days = uptime_s // 86400
+    disk = psutil.disk_usage('/')
+    uptime_s = int(time.time() - psutil.boot_time())
+    return jsonify({
+        'cpu': cpu,
+        'cores': cores,
+        'mem_pct': mem.percent,
+        'mem_used': mem.used,
+        'mem_total': mem.total,
+        'disk_pct': disk.percent,
+        'disk_used': disk.used,
+        'disk_total': disk.total,
+        'uptime_h': (uptime_s // 3600) % 24,
+        'uptime_days': uptime_s // 86400,
+    })
 
-    disks = []
-    for part in psutil.disk_partitions():
+@app.route('/api/disks')
+def disks():
+    result = []
+    seen = set()
+    for part in psutil.disk_partitions(all=False):
+        if part.fstype == '' or part.mountpoint in seen:
+            continue
+        if any(x in part.mountpoint for x in ['/etc/', '/proc', '/sys', '/dev', '/run']):
+            continue
         try:
             usage = psutil.disk_usage(part.mountpoint)
-            disks.append({
+            result.append({
                 'mountpoint': part.mountpoint,
                 'total': usage.total,
                 'used': usage.used,
                 'free': usage.free,
                 'percent': usage.percent,
             })
+            seen.add(part.mountpoint)
         except:
             pass
-
-    return jsonify({
-        'cpu': {'percent': cpu, 'cores': cores},
-        'memory': {'percent': mem.percent, 'used': mem.used, 'total': mem.total, 'free': mem.free},
-        'disk_root': {'percent': disk_root.percent, 'used': disk_root.used, 'total': disk_root.total, 'free': disk_root.free},
-        'uptime_h': uptime_h % 24,
-        'uptime_days': uptime_days,
-        'disks': disks,
-    })
+    return jsonify({'disks': result})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
