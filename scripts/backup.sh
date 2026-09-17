@@ -134,7 +134,16 @@ fi
 # ── 3. Volumes ──────────────────────────────────────────────────────────────
 # Comprovante de despesa e anexo de contestacao nao estao em banco nenhum:
 # vivem em volume. Backup de banco nao os alcanca.
+#
+# So aos domingos, de proposito. Sao ~940MB que quase nao mudam -- comprovante
+# entra e nunca mais e tocado -- contra 11MB de banco, que e o movimento de
+# verdade. Copiar isso toda noite ocupava 21GB no disco para guardar catorze
+# vezes o mesmo arquivo. Nada se perde: um comprovante que entrou na terca
+# aparece na copia do domingo seguinte e em todas as posteriores.
 echo
+if [ "$(date +%u)" != "7" ] && [ "${FORCAR_VOLUMES:-}" != "1" ]; then
+    echo "-- Volumes: so aos domingos (hoje e $(date '+%A')). FORCAR_VOLUMES=1 para rodar agora."
+else
 echo "-- Volumes"
 mkdir -p "$PASTA/volumes"
 for v in $(docker volume ls -q); do
@@ -157,6 +166,7 @@ for v in $(docker volume ls -q); do
     }
     echo "   $(du -h "$PASTA/volumes/$v.tar.gz" | cut -f1)	$v"
 done
+fi
 
 # ── 4. Limpeza ──────────────────────────────────────────────────────────────
 echo
