@@ -142,6 +142,15 @@ for v in $(docker volume ls -q); do
     [ -d "$caminho" ] || continue
     # Volume vazio nao vira arquivo: so faria barulho na listagem.
     [ -n "$(ls -A "$caminho" 2>/dev/null)" ] || continue
+
+    # Diretorio de dados de Postgres NAO se copia com tar: com o banco no ar a
+    # copia sai inconsistente e nao restaura. Pior que inutil, e enganosa --
+    # fica com cara de backup. Esses bancos ja estao salvos direito nos .dump
+    # acima. PG_VERSION so existe num data directory, entao e o sinal exato.
+    if [ -f "$caminho/PG_VERSION" ]; then
+        echo "   (pulando $v — data directory do Postgres, ja coberto pelos .dump)"
+        continue
+    fi
     tar czf "$PASTA/volumes/$v.tar.gz" -C "$caminho" . 2>/dev/null || {
         echo "   AVISO: falhei em $v (segue o baile)" >&2
         continue
