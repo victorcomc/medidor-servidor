@@ -33,9 +33,11 @@
 #   os papeis/usuarios do Postgres (so numa maquina nova):
 #     docker exec -i <postgres> psql -U postgres < .../globais.sql
 #
-#   o SQLite do LPCO: parar o container, copiar o .db para /data no volume,
-#     subir de novo. O arquivo do backup ja vem consolidado -- nao precisa do
-#     -wal junto, porque foi gerado pela API de backup do SQLite e nao por cp.
+#   o SQLite do LPCO: descompactar (gunzip lpco_monitor.db.gz), parar o
+#     container, copiar o .db para /data no volume, subir de novo. O arquivo do
+#     backup ja vem consolidado -- nao precisa do -wal junto, porque foi gerado
+#     pela API de backup do SQLite e nao por cp. (Ate 2026-09-28 ele era salvo
+#     sem compressao, como lpco_monitor.db.)
 #
 #   um volume:
 #     tar xzf volume-<nome>.tar.gz -C /var/lib/docker/volumes/<nome>/_data
@@ -44,7 +46,12 @@
 set -euo pipefail
 
 DESTINO="${DESTINO:-/var/backups/hevile}"
-DIAS_PARA_GUARDAR="${DIAS_PARA_GUARDAR:-14}"
+# Guarda pouco aqui porque o historico longo mora no PC (puxar-backup.ps1).
+# So apaga o que o PC JA TEM: o recibo .ultima-copia-externa diz ate onde ele
+# copiou. Se o PC parar de puxar, nada e apagado ate DIAS_MAXIMO -- ai o disco
+# fala mais alto (e o conferir-backup.sh ja estara avisando ha dias).
+DIAS_PARA_GUARDAR="${DIAS_PARA_GUARDAR:-3}"
+DIAS_MAXIMO="${DIAS_MAXIMO:-14}"
 # Abaixo disto o script nem comeca. Encher o disco raiz derrubaria o servidor
 # inteiro -- backup nao pode ser a causa da queda que ele deveria remediar.
 MINIMO_LIVRE_GB="${MINIMO_LIVRE_GB:-15}"
@@ -128,7 +135,11 @@ copia.close(); origem.close()
 "
     docker cp "$LPCO:/tmp/backup_lpco.db" "$PASTA/lpco_monitor.db" > /dev/null
     docker exec "$LPCO" rm -f /tmp/backup_lpco.db
-    echo "   $(du -h "$PASTA/lpco_monitor.db" | cut -f1)	lpco_monitor.db ($LPCO)"
+    # Comprimido: sao ~590MB que viram ~42MB (medido em 2026-09-28). Era esse
+    # arquivo que fazia cada noite pesar meio gigabyte e o download do PC de
+    # manha parecer travado.
+    gzip -6 "$PASTA/lpco_monitor.db"
+    echo "   $(du -h "$PASTA/lpco_monitor.db.gz" | cut -f1)	lpco_monitor.db.gz ($LPCO)"
 fi
 
 # ── 3. Volumes ──────────────────────────────────────────────────────────────
@@ -170,9 +181,24 @@ fi
 
 # ── 4. Limpeza ──────────────────────────────────────────────────────────────
 echo
-echo "-- Limpeza (guardando $DIAS_PARA_GUARDAR dias)"
-find "$DESTINO" -maxdepth 1 -type d -name '20*' -mtime +"$DIAS_PARA_GUARDAR" \
-     -exec rm -rf {} + 2>/dev/null || true
+echo "-- Limpeza (guardando $DIAS_PARA_GUARDAR dias do que o PC ja copiou; no maximo $DIAS_MAXIMO)"
+# "|| true": com set -e e pipefail, recibo ou pasta de anexos ausentes
+# derrubariam o script aqui, depois do backup pronto.
+recibo="$(cat "$DESTINO/.ultima-copia-externa" 2>/dev/null | tr -dc '0-9-' || true)"
+# A pasta mais nova que tem os anexos (volumes) nunca sai: eles so sao
+# copiados aos domingos, e o conferir-backup.sh cobra uma copia recente deles.
+ultima_vol="$(ls -1d "$DESTINO"/20*/volumes 2>/dev/null | sort | tail -1 | xargs -r dirname || true)"
+for p in $(find "$DESTINO" -maxdepth 1 -type d -name '20*' -mtime +"$DIAS_PARA_GUARDAR" | sort); do
+    n="$(basename "$p")"
+    [ "$p" = "$ultima_vol" ] && { echo "   mantida (ultima com anexos): $n"; continue; }
+    if [ -n "$recibo" ] && [[ ! "$n" > "$recibo" ]]; then
+        rm -rf "$p" && echo "   apagada (ja esta no PC): $n"
+    elif [ -n "$(find "$p" -maxdepth 0 -mtime +"$DIAS_MAXIMO")" ]; then
+        rm -rf "$p" && echo "   apagada SEM estar no PC (mais de $DIAS_MAXIMO dias): $n" >&2
+    else
+        echo "   mantida (o PC ainda nao copiou): $n"
+    fi
+done
 
 trap - ERR
 

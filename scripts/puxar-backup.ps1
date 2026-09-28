@@ -71,16 +71,24 @@ Falar ""
 
 # ── copia o que falta ───────────────────────────────────────────────────────
 $copiadas = 0
+$falhas = 0
+$i = 0
 foreach ($pasta in $faltando) {
-    Falar "  baixando $pasta ..."
+    $i++
+    # Tamanho antes de começar: sem isso a tela ficava parada em "baixando..."
+    # por uma hora e parecia travada (2026-09-28).
+    $mb = & ssh @sshArgs $Servidor "du -sm $Origem/$pasta 2>/dev/null | cut -f1"
+    Falar "  [$i/$($faltando.Count)] baixando $pasta ($mb MB) ..."
     # Para uma pasta PARCIAL: baixa num nome temporário e só renomeia no fim.
     # Sem isso, uma queda de rede deixaria uma pasta com cara de completa, e
     # da próxima vez o script a consideraria já copiada.
     $temp = Join-Path $Destino "$pasta.baixando"
     if (Test-Path $temp) { Remove-Item -Recurse -Force $temp }
 
-    & scp @sshArgs -r -q "${Servidor}:${Origem}/${pasta}" $temp
+    # Sem -q: o scp mostra o andamento de cada arquivo (%, MB/s, tempo que falta).
+    & scp @sshArgs -r "${Servidor}:${Origem}/${pasta}" $temp
     if ($LASTEXITCODE -ne 0) {
+        $falhas++
         Falar "     FALHOU — deixo para a próxima execução."
         if (Test-Path $temp) { Remove-Item -Recurse -Force $temp }
         continue
@@ -126,3 +134,35 @@ if ($idade -gt 2) {
     Falar "pode ter parado de rodar — confira o cron lá."
     exit 1
 }
+
+# ── recibo para o servidor ──────────────────────────────────────────────────
+# O conferir-backup.sh de lá só enxerga o próprio disco: não tem como saber se
+# esta cópia está acontecendo. Sem o recibo, o PC poderia parar de puxar por
+# meses e o servidor seguiria achando que está tudo bem.
+#
+# Exige o backup MAIS NOVO do servidor, e não só "um recente": a conferência de
+# idade acima tolera 2 dias, e recibo em cima dela faria uma cópia que falha
+# todo dia parecer sucesso. Recibo de cópia que falhou é pior que nenhum.
+# Recibo só com TUDO copiado: o servidor apaga o que o recibo diz que já está
+# aqui, então uma pasta antiga que falhou não pode ficar coberta pela mais nova.
+if ($falhas -gt 0) {
+    Falar ""
+    Falar "ATENÇÃO: $falhas pasta(s) não baixaram. Sem recibo hoje, para o servidor não apagar nada."
+    exit 1
+}
+$maisNovaRemota = ($remotas | Sort-Object -Descending | Select-Object -First 1)
+if ($maisNova -ne $maisNovaRemota) {
+    Falar ""
+    Falar "ATENÇÃO: o backup mais novo do servidor ($maisNovaRemota) não chegou aqui."
+    Falar "Sem recibo hoje — o servidor vai avisar se isso se repetir."
+    exit 1
+}
+
+& ssh @sshArgs $Servidor "echo $maisNova > $Origem/.ultima-copia-externa"
+if ($LASTEXITCODE -ne 0) {
+    Falar ""
+    Falar "AVISO: a cópia está aqui, mas não consegui deixar o recibo no servidor."
+    Falar "O conferidor de lá vai achar que a cópia parou."
+    exit 1
+}
+Falar "Recibo deixado no servidor."

@@ -179,6 +179,11 @@ testar_um() {
 # ---------------------------------------------------------------------------
 testar_lpco() {
   local arquivo="$PASTA/lpco_monitor.db"
+  # Desde 2026-09-28 o backup guarda o SQLite comprimido.
+  if [ ! -f "$arquivo" ] && [ -f "$arquivo.gz" ]; then
+    gunzip -c "$arquivo.gz" > /tmp/restauracao_lpco.db
+    arquivo=/tmp/restauracao_lpco.db
+  fi
   echo "=============================================================="
   echo "BANCO: LPCO (SQLite)"
   echo "=============================================================="
