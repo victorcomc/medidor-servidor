@@ -29,7 +29,21 @@ PREFIXO="restauracao_teste"
 # todos os dias as 3h. Filtra pela IMAGEM (o nome do container e um uuid do
 # Coolify) e exclui os que comecam com `coolify` -- o proprio Coolify roda um
 # Postgres interno, e restaurar backup da Hevile em cima dele seria desastre.
-PG="$(docker ps --format '{{.Names}}	{{.Image}}'       | grep -i postgres | grep -v '^coolify' | head -1 | cut -f1 || true)"
+# O "banco de dados geral" e o Postgres que tem o magaya_db. Pegar o primeiro
+# container com "postgres" no nome deu errado em 14/10/2026: o servico da
+# Evolution (WhatsApp) trouxe um Postgres proprio, sem a role postgres, e o
+# backup inteiro falhou achando que os bancos tinham sumido.
+achar_pg() {
+  local c
+  for c in $(docker ps --format '{{.Names}}\t{{.Image}}' | grep -i postgres | grep -v '^coolify' | cut -f1); do
+    if docker exec "$c" psql -U postgres -tAc "select 1 from pg_database where datname = 'magaya_db'" 2>/dev/null | grep -qx 1; then
+      echo "$c"
+      return 0
+    fi
+  done
+  return 1
+}
+PG="$(achar_pg || true)"
 if [ -z "$PG" ]; then
   echo "Containers com postgres na imagem:" >&2
   docker ps --format '  {{.Names}}	{{.Image}}' | grep -i postgres >&2 || echo "  (nenhum)" >&2

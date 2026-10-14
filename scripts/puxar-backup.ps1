@@ -32,7 +32,10 @@ $ErrorActionPreference = "Stop"
 # Guardo mais dias aqui do que no servidor de propósito: espaço em PC sobra, e
 # o valor desta cópia é justamente alcançar mais para trás do que a de lá.
 
-$sshArgs = @()
+# Tempo limite na conexão: em 14/10/2026 uma conexão caiu no meio e o ssh ficou
+# esperando para sempre — a tarefa seguiu "em execução" e o PC parou de puxar.
+# BatchMode: nunca parar pedindo senha ou confirmação numa tarefa sem ninguém.
+$sshArgs = @("-o", "ConnectTimeout=30", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4", "-o", "BatchMode=yes")
 if ($Chave) { $sshArgs += @("-i", $Chave) }
 
 function Falar($texto) { Write-Host $texto }

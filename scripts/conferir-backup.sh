@@ -61,6 +61,21 @@ FUSO="<-03>3"
 
 MODO="${1:-}"
 problemas=()
+# O "banco de dados geral" e o Postgres que tem o magaya_db. Pegar o primeiro
+# container com "postgres" no nome deu errado em 14/10/2026: o servico da
+# Evolution (WhatsApp) trouxe um Postgres proprio, sem a role postgres, e o
+# backup inteiro falhou achando que os bancos tinham sumido.
+achar_pg() {
+  local c
+  for c in $(docker ps --format '{{.Names}}\t{{.Image}}' | grep -i postgres | grep -v '^coolify' | cut -f1); do
+    if docker exec "$c" psql -U postgres -tAc "select 1 from pg_database where datname = 'magaya_db'" 2>/dev/null | grep -qx 1; then
+      echo "$c"
+      return 0
+    fi
+  done
+  return 1
+}
+
 avisar() { problemas+=("$1"); echo "  PROBLEMA: $1"; }
 
 # 20260923-0300 (UTC, que e o relogio do servidor) -> "23/09 00:00" em Recife.
@@ -116,8 +131,7 @@ if [ "$backup_de_hoje" -eq 1 ]; then
     || avisar "Falta o globais.sql (usuarios e senhas do Postgres) no backup de hoje."
 
   # Mesmo metodo do backup.sh, de proposito: se um acha, o outro acha.
-  PG="$(docker ps --format '{{.Names}}	{{.Image}}' \
-        | grep -i postgres | grep -v '^coolify' | head -1 | cut -f1 || true)"
+  PG="$(achar_pg || true)"
   if [ -z "$PG" ]; then
     avisar "Nao achei o container do Postgres. Os sistemas estao no ar?"
   else
