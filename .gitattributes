@@ -1,0 +1,2 @@
+# Scripts que rodam no servidor Linux: fim de linha sempre LF, mesmo editando no Windows.
+*.sh text eol=lf
